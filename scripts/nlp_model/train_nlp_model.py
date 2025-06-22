@@ -1,5 +1,6 @@
 import ast
 import time
+import pickle
 
 from matplotlib import pyplot as plt
 from sklearn.metrics import classification_report
@@ -149,8 +150,16 @@ def train_model():
     print(f"\nTimp mediu predicție: {sum(inference_times) / len(inference_times):.4f} sec")
     print(f"Timp total pentru {len(test_texts)} texte: {sum(inference_times):.2f} sec")
 
+    # === Salvare model NLP ===
+    model.save("models/nlp_model/nlp_comorbidities_model.h5")
 
-if __name__ == "__main__":
-    print("Antrenarea modelului a început...")
-    # Rulează antrenarea modelului
-    train_model()  # NLP
+    # === Salvare Tokenizer ===
+    with open("models/nlp_model/tokenizer.pkl", "wb") as f:
+        pickle.dump(tokenizer, f)
+
+    # === Salvare MultiLabelBinarizer ===
+    with open("models/nlp_model/mlb_nlp.pkl", "wb") as f:
+        pickle.dump(mlb, f)
+
+    print("Modelul NLP, tokenizerul și binarizatorul au fost salvate.")
+

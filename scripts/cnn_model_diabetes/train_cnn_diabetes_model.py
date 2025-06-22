@@ -3,6 +3,8 @@ import ast
 import pandas as pd
 import seaborn as sns
 import tensorflow as tf
+import joblib
+import json
 from matplotlib import pyplot as plt
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.preprocessing import MultiLabelBinarizer, StandardScaler
@@ -43,7 +45,7 @@ def train_cnn_diabetes_model():
     test = load_data("data/datasets/test/test.csv", sep=';')
 
     feature_cols = [
-        "Vârstă", "Ești ",  # ← adaugă sexul pentru logica SOP
+        "Vârstă", "Ești ",
         "Care este greutatea ta actuala?", "Care este înălțimea ta? ",
         "Care este circumferința taliei tale, măsurata deasupra de ombilicului?",
         "IMC",
@@ -55,6 +57,10 @@ def train_cnn_diabetes_model():
         "scor_medical",
         "labels"
     ]
+
+    with open("models/feature_cols.json", "w", encoding="utf-8") as f:
+        json.dump(feature_cols, f, ensure_ascii=False, indent=4)
+
     # Convertire sex (femeie = 1, bărbat = 0)
     for df_ in [train, val, test]:
         df_["Ești "] = df_["Ești "].map({"femeie": 1, "barbat": 0}).fillna(0)
@@ -100,6 +106,8 @@ def train_cnn_diabetes_model():
     X_val = scaler.transform(val_input)
     X_test = scaler.transform(test_input)
 
+    joblib.dump(scaler, "models/scaler.save")
+
     input_dim = X_train.shape[1]
     output_dim = len(output_cols)
     model = create_diabetes_model(input_dim=input_dim, output_dim=output_dim)
@@ -125,9 +133,8 @@ def train_cnn_diabetes_model():
     history = model.fit(
         X_train, y_train,
         epochs=30,
-        batch_size=16,
+        batch_size=32,
         validation_data=(X_val, y_val),
-        # class_weight poate fi complicat pentru multi-label, îl poți omite sau gestiona manual cu sample_weight
         callbacks=[
             tf.keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True),
             tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6, verbose=1)
@@ -136,7 +143,7 @@ def train_cnn_diabetes_model():
     plot_model_performance(history)
 
     y_pred = model.predict(X_test)
-    y_pred_bin = (y_pred > 0.4).astype(int)  # matrice binară
+    y_pred_bin = (y_pred > 0.3).astype(int)  # matrice binară
 
     for i, col in enumerate(output_cols):
         print(f"\n=== Classification Report pentru {col} ===")
@@ -181,4 +188,4 @@ def train_cnn_diabetes_model():
     # plt.title("Matricea de corelație între variabile numerice")
     # plt.show()
 
-    model.save("models/nlp_model/trained_nlp_model.h5")
+    # model.save("models/nlp_model/trained_diabetes_model.h5")

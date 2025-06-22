@@ -1,5 +1,4 @@
 import ast
-import json
 import time
 
 from matplotlib import pyplot as plt
@@ -25,7 +24,7 @@ def concat_text(df, text_cols):
         return df[text_cols].fillna("").agg(" ".join, axis=1)
 
 
-def train_nlp_model():
+def train_model():
     max_len = 200
     max_vocab = 12000
 
@@ -68,10 +67,6 @@ def train_nlp_model():
     y_test = mlb.transform(test["labels"])
 
     print("Etichete:", mlb.classes_)
-
-    label_names = mlb.classes_.tolist()
-    with open("models/nlp_model/label_names.json", "w") as f:
-        json.dump(label_names, f)
 
     # === Creează și compilează modelul ===
     model = create_nlp_model(max_len=max_len, max_vocab=max_vocab, num_classes=mlb)
@@ -154,7 +149,8 @@ def train_nlp_model():
     print(f"\nTimp mediu predicție: {sum(inference_times) / len(inference_times):.4f} sec")
     print(f"Timp total pentru {len(test_texts)} texte: {sum(inference_times):.2f} sec")
 
-    tokenizer_json = tokenizer.to_json()
-    with open("models/nlp_model/tokenizer.json", "w") as f:
-        f.write(tokenizer_json)
-    model.save("models/nlp_model/trained_nlp_model.h5")
+
+if __name__ == "__main__":
+    print("Antrenarea modelului a început...")
+    # Rulează antrenarea modelului
+    train_model()  # NLP

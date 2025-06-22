@@ -1,5 +1,4 @@
 import ast
-import json
 
 import pandas as pd
 import seaborn as sns
@@ -37,7 +36,7 @@ def interpret_risk(prob):
         return "risc ridicat"
 
 
-def train_mlp_diabetes_model():
+def train_cnn_diabetes_model():
     # === 1. Încarcă datele
     train = load_data("data/datasets/train/train.csv", sep=';')
     val = load_data("data/datasets/validation/val.csv", sep=';')
@@ -58,7 +57,7 @@ def train_mlp_diabetes_model():
     ]
     # Convertire sex (femeie = 1, bărbat = 0)
     for df_ in [train, val, test]:
-        df_["Ești "] = df_["Ești "].map({"femeie": 1, "bărbat": 0}).fillna(0)
+        df_["Ești "] = df_["Ești "].map({"femeie": 1, "barbat": 0}).fillna(0)
 
     # === 2. Etichete NLP → MultiLabel Binarizer
     train["labels"] = train["labels"].apply(ast.literal_eval)
@@ -66,7 +65,7 @@ def train_mlp_diabetes_model():
     test["labels"] = test["labels"].apply(ast.literal_eval)
 
     mlb_nlp = MultiLabelBinarizer()
-    labels_train = pd.DataFrame(mlb_nlp.fit_transform(tr), columns=mlb_nlp.classes_)
+    labels_train = pd.DataFrame(mlb_nlp.fit_transform(train["labels"]), columns=mlb_nlp.classes_)
     labels_val = pd.DataFrame(mlb_nlp.transform(val["labels"]), columns=mlb_nlp.classes_)
     labels_test = pd.DataFrame(mlb_nlp.transform(test["labels"]), columns=mlb_nlp.classes_)
 
@@ -101,14 +100,6 @@ def train_mlp_diabetes_model():
     X_val = scaler.transform(val_input)
     X_test = scaler.transform(test_input)
 
-    scaler_stats = {
-        "mean": scaler.mean_.tolist(),
-        "std": scaler.scale_.tolist()
-    }
-
-    with open("models/mlp_model_diabetes/scaler_stats.json", "w") as f:
-        json.dump(scaler_stats, f)
-
     input_dim = X_train.shape[1]
     output_dim = len(output_cols)
     model = create_diabetes_model(input_dim=input_dim, output_dim=output_dim)
@@ -134,7 +125,7 @@ def train_mlp_diabetes_model():
     history = model.fit(
         X_train, y_train,
         epochs=30,
-        batch_size=64,
+        batch_size=16,
         validation_data=(X_val, y_val),
         # class_weight poate fi complicat pentru multi-label, îl poți omite sau gestiona manual cu sample_weight
         callbacks=[
@@ -190,4 +181,4 @@ def train_mlp_diabetes_model():
     # plt.title("Matricea de corelație între variabile numerice")
     # plt.show()
 
-    model.save("models/mlp_model_diabetes/trained_diabetes_model.h5")
+    model.save("models/nlp_model/trained_nlp_model.h5")

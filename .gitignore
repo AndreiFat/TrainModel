@@ -1,1 +1,9 @@
 /.venv/
+
+*.pyc
+
+.DS_Store
+
+.idea/TrainModel.iml
+
+.idea/misc.xml

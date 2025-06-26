@@ -25,8 +25,8 @@ def concat_text(df, text_cols):
 
 
 def train_model():
-    max_len = 200
-    max_vocab = 12000
+    max_len = 300
+    max_vocab = 16000
 
     # 1. Încarcă datele
     train = load_data("data/datasets/train/train.csv", sep=';')
@@ -79,6 +79,7 @@ def train_model():
         loss='binary_crossentropy',
         optimizer="adam",
         metrics=[
+            "accuracy",
             BinaryAccuracy(name='binary_accuracy'),
             Precision(name='precision'),
             Recall(name='recall'),
@@ -91,7 +92,7 @@ def train_model():
     history = model.fit(
         X_train, y_train,
         epochs=20,
-        batch_size=32,
+        batch_size=64,
         validation_data=(X_val, y_val),
         callbacks=[early_stop, reduce_lr, time_callback]
     )
@@ -119,7 +120,7 @@ def train_model():
 
     # === Classification report ===
     y_pred = model.predict(X_test)
-    y_pred_bin = (y_pred > 0.2).astype(int)
+    y_pred_bin = (y_pred > 0.5).astype(int)
 
     print("\n=== Classification Report ===")
     print(classification_report(y_test, y_pred_bin, target_names=mlb.classes_, zero_division=0))
@@ -128,7 +129,7 @@ def train_model():
     def predict_labels(test_sample):
         seq = pad_sequences(tokenizer.texts_to_sequences([test_sample]), maxlen=max_len)
         pred = model.predict(seq)[0]
-        threshold = 0.4
+        threshold = 0.5
         labels = [mlb.classes_[i] for i, p in enumerate(pred) if p > threshold]
         return labels
 
@@ -148,9 +149,3 @@ def train_model():
 
     print(f"\nTimp mediu predicție: {sum(inference_times) / len(inference_times):.4f} sec")
     print(f"Timp total pentru {len(test_texts)} texte: {sum(inference_times):.2f} sec")
-
-
-if __name__ == "__main__":
-    print("Antrenarea modelului a început...")
-    # Rulează antrenarea modelului
-    train_model()  # NLP

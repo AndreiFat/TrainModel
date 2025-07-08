@@ -2,19 +2,14 @@ import ast
 import json
 
 import joblib
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from matplotlib import pyplot as plt
-from sklearn.metrics import confusion_matrix, classification_report
-from sklearn.preprocessing import MultiLabelBinarizer, StandardScaler
-from sklearn.utils import compute_class_weight
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
-from tensorflow.keras.metrics import Precision, Recall
-from tensorflow.keras.optimizers import Adam
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.preprocessing import StandardScaler, MultiLabelBinarizer
 
 from scripts.mlp_model_cardio.create_mlp_model import create_mlp_model
-from scripts.utils.load_data.load_data_utils import load_data
 
 
 def interpret_risk(prob):
@@ -28,161 +23,153 @@ def interpret_risk(prob):
 
 def train_mlp_cardio():
     # === 1. Încarcă datele
-    train = load_data("data/datasets/train/train.csv", sep=';')
-    val = load_data("data/datasets/validation/val.csv", sep=';')
-    test = load_data("data/datasets/test/test.csv", sep=';')
+    train = pd.read_csv("data/datasets/train/train_cardio.csv", sep=";")
+    val = pd.read_csv("data/datasets/validation/val_cardio.csv", sep=";")
+    test = pd.read_csv("data/datasets/test/test_cardio.csv", sep=";")
 
-    # === 2. Coloane relevante
-    feature_cols = [
+    # === 2. Coloane folosite
+    numeric_cols = [
         "Vârstă",
-        "Ești ",
-        "Care este greutatea ta actuala?", "Care este înălțimea ta? ",
+        "Care este greutatea ta actuala?",
+        "Care este înălțimea ta? ",
         "Care este circumferința taliei tale, măsurata deasupra de ombilicului?",
         "IMC",
+        "scor_medical_cardio"
+    ]
+    binary_cols = [
+        "Ești ",  # gen: 0 = femeie, 1 = bărbat
         "obezitate abdominala",
-        # "slăbesc greu",
-        # "mă îngraș ușor",
-        # "depun grasime in zona abdominala",
+        "rezistenta la insulina",
+        "prediabet",
+        "diabet zaharat tip 2",
         "oboseala permanenta",
         "lipsa de energie",
-        # "urinare nocturna",
-        # "pofte de dulce",
-        # "foame greu de controlat",
-        "ficat gras",
         "dislipidemie (grăsimi crescute in sânge)",
         "hipertensiune arteriala",
         "infarct",
         "avc",
         "stent_sau_bypass",
         "fibrilatie_sau_ritm",
-        "embolie_sau_tromboza",
-        # "risc_cardiovascular",
-        "scor_medical_cardio",
+        "embolie_sau_tromboza"
     ]
-
-    # === 3. Convertire sex
-    for df_ in [train, val, test]:
-        df_["Ești "] = df_["Ești "].map({"femeie": 1, "barbat": 0}).fillna(0).astype(int)
-
-    # === 4. Transformă coloana `labels` folosind MultiLabelBinarizer
-    mlb = MultiLabelBinarizer()
-
-    # Convertim stringul în listă
-    train_labels = train['labels'].apply(ast.literal_eval)
-    val_labels = val['labels'].apply(ast.literal_eval)
-    test_labels = test['labels'].apply(ast.literal_eval)
-
-    # Fit pe train, transform pe toate
-    mlb.fit(train_labels)
-
-    train_mlb = pd.DataFrame(mlb.transform(train_labels), columns=mlb.classes_)
-    val_mlb = pd.DataFrame(mlb.transform(val_labels), columns=mlb.classes_)
-    test_mlb = pd.DataFrame(mlb.transform(test_labels), columns=mlb.classes_)
-
-    # Concatenăm în dataframe-urile principale
-    train = pd.concat([train.reset_index(drop=True), train_mlb], axis=1)
-    val = pd.concat([val.reset_index(drop=True), val_mlb], axis=1)
-    test = pd.concat([test.reset_index(drop=True), test_mlb], axis=1)
-
-    # Adăugăm aceste coloane în feature_cols
-    feature_cols += list(train_mlb.columns)
-
-    # === 5. Pregătește X și y
     target_col = "risc_cardiovascular"
 
-    X_train = train[feature_cols]
-    y_train = train[target_col]
+    # === 3. Procesează etichetele NLP
+    train_labels = train["labels"].apply(ast.literal_eval)
+    val_labels = val["labels"].apply(ast.literal_eval)
+    test_labels = test["labels"].apply(ast.literal_eval)
 
-    X_val = val[feature_cols]
-    y_val = val[target_col]
+    mlb = MultiLabelBinarizer()
+    mlb.fit(train_labels)
 
-    X_test = test[feature_cols]
-    y_test = test[target_col]
+    train_nlp = pd.DataFrame(mlb.transform(train_labels), columns=mlb.classes_)
+    val_nlp = pd.DataFrame(mlb.transform(val_labels), columns=mlb.classes_)
+    test_nlp = pd.DataFrame(mlb.transform(test_labels), columns=mlb.classes_)
 
-    # === 6. Standardizare
+    # === 4. Concatenare NLP la datele originale
+    train = pd.concat([train.reset_index(drop=True), train_nlp], axis=1)
+    val = pd.concat([val.reset_index(drop=True), val_nlp], axis=1)
+    test = pd.concat([test.reset_index(drop=True), test_nlp], axis=1)
+
+    nlp_cols = list(train_nlp.columns)  # toate etichetele NLP devin features
+
+    feature_cols = numeric_cols + binary_cols + nlp_cols
+
+    # === 5. Preprocesare
     scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_val_scaled = scaler.transform(X_val)
-    X_test_scaled = scaler.transform(X_test)
+    X_train_num = scaler.fit_transform(train[numeric_cols])
+    X_val_num = scaler.transform(val[numeric_cols])
+    X_test_num = scaler.transform(test[numeric_cols])
 
-    # === 6. Arată distribuția claselor
-    def show_class_distribution(y, name):
-        unique, counts = np.unique(y, return_counts=True)
-        print(f"Distribuție clase în {name}: {dict(zip(unique, counts))}")
+    X_train = np.concatenate([
+        X_train_num,
+        train[binary_cols + nlp_cols].values
+    ], axis=1)
 
-    show_class_distribution(y_train, "train")
-    show_class_distribution(y_val, "validation")
-    show_class_distribution(y_test, "test")
+    X_val = np.concatenate([
+        X_val_num,
+        val[binary_cols + nlp_cols].values
+    ], axis=1)
 
-    # === 7. Antrenează modelul
-    model = create_mlp_model(input_dim=X_train_scaled.shape[1])
+    X_test = np.concatenate([
+        X_test_num,
+        test[binary_cols + nlp_cols].values
+    ], axis=1)
 
-    classes = np.array([0, 1])
-    weights = compute_class_weight('balanced', classes=classes, y=y_train)
-    class_weight_dict = {cls: weight for cls, weight in zip(classes, weights)}
+    y_train = train[target_col].astype(int).values
+    y_val = val[target_col].astype(int).values
+    y_test = test[target_col].astype(int).values
 
-    optimizer = Adam(learning_rate=1e-4)
+    # === 6. Model
+    model = create_mlp_model(input_dim=X_train.shape[1])
+    history = model.fit(
+        X_train, y_train,
+        validation_data=(X_val, y_val),
+        epochs=20,
+        batch_size=32
+    )
 
-    # Callbacks: EarlyStopping + ReduceLROnPlateau
-    early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
-    reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6, verbose=1)
+    # === 7. Evaluare
+    y_pred_proba = model.predict(X_test).flatten()
+    y_pred = (y_pred_proba > 0.5).astype(int)
 
-    model.compile(optimizer=optimizer,
-                  loss='binary_crossentropy',
-                  metrics=['accuracy',
-                           Precision(),
-                           Recall()])
+    print("\nAcuratețe:", accuracy_score(y_test, y_pred))
+    print("\nClassification report:")
+    print(classification_report(y_test, y_pred))
 
-    model.fit(X_train_scaled, y_train,
-              validation_data=(X_val_scaled, y_val),
-              class_weight=class_weight_dict,
-              epochs=10,
-              batch_size=32,
-              callbacks=[early_stopping, reduce_lr],
-              )
-
-    # === 8. Evaluează pe test
-    val_loss, val_acc, val_prec, val_rec = model.evaluate(X_val_scaled, y_val)
-    print(f"Val - Loss: {val_loss}, Acc: {val_acc}, Prec: {val_prec}, Rec: {val_rec}")
-
-    # === 9. Predicții
-    y_pred_proba = model.predict(X_test_scaled).flatten()
-    y_pred_bin = (y_pred_proba > 0.5).astype(int)
-
-    # === 10. Matrice de confuzie
-    cm = confusion_matrix(y_test, y_pred_bin)
-    plt.figure(figsize=(5, 4))
-    sns.heatmap(cm, annot=True, fmt='d', cmap="Reds", xticklabels=["Negativ", "Pozitiv"],
-                yticklabels=["Negativ", "Pozitiv"])
-    plt.title("Matrice de Confuzie - Test Set")
-    plt.xlabel("Predicție")
-    plt.ylabel("Adevăr")
-    plt.tight_layout()
-    plt.show()
-
-    # === 11. Classification report
-    print("\nClassification Report:")
-    print(classification_report(y_test, y_pred_bin))
-
-    # === 12. Primele 5 predicții interpretate
     print("\nPrimele 5 predicții și interpretări:")
-    for i in range(50):
+    for i in range(5):
         prob = y_pred_proba[i]
         print(
-            f"Persoana {i + 1}: risc = {prob * 100:.1f}% | clasă reală = {y_test.iloc[i]} | interpretare: {interpret_risk(prob)}")
+            f"Persoana {i + 1}: risc = {prob * 100:.1f}% | clasă reală = {y_test[i]} | interpretare: {interpret_risk(prob)}"
+        )
 
-    # model_rf = RandomForestClassifier()
-    # model_rf.fit(X_train, y_train)
-    #
-    # importances = pd.Series(model_rf.feature_importances_, index=X_train.columns)
-    # importances.sort_values().plot(kind='barh', figsize=(10, 8))
-    # plt.title("Importanța variabilelor (Random Forest)")
-    # plt.show()
+    # === 8. Matrice de confuzie
+    cm = confusion_matrix(y_test, y_pred)
+    sns.heatmap(cm, annot=True, cmap="Reds", fmt='d')
+    plt.xlabel("Predicție")
+    plt.ylabel("Adevăr")
+    plt.title("Matrice de Confuzie")
+    plt.show()
 
-    # === 13. Salvare model
-    model.save("models/mlp_model_cardio/trained_mlp_cardio_risk.h5")
-    joblib.dump(scaler, "models/mlp_model_cardio/scaler.joblib")
-    joblib.dump(mlb, "models/mlp_model_cardio/mlb.joblib")
+    # === 9. Acuratețe și loss
+    plt.plot(history.history['accuracy'], label='Train acc')
+    plt.plot(history.history['val_accuracy'], label='Val acc')
+    plt.legend()
+    plt.title("Acuratețe")
+    plt.show()
 
-    with open("models/mlp_model_cardio/feature_cols.json", "w", encoding="utf-8") as f:
+    plt.plot(history.history['loss'], label='Train loss')
+    plt.plot(history.history['val_loss'], label='Val loss')
+    plt.legend()
+    plt.title("Loss")
+    plt.show()
+
+    # === Salvare pentru FastAPI
+    model.save("models/mlp_model_cardio/cardio_model.h5")
+    joblib.dump(scaler, "models/mlp_model_cardio/cardio_scaler.pkl")
+    joblib.dump(mlb, "models/mlp_model_cardio/cardio_mlb.pkl")
+    with open("models/mlp_model_cardio/cardio_feature_cols.json", "w", encoding="utf-8") as f:
         json.dump(feature_cols, f, ensure_ascii=False, indent=4)
+
+    # === 10. Importanță medie absolută
+    import shap
+
+    explainer = shap.Explainer(model, X_train, feature_names=feature_cols)
+    shap_values = explainer(X_test)
+
+    # Calculăm media absolută SHAP per feature
+    mean_abs_shap = np.abs(shap_values.values).mean(axis=0)
+    importance_df = pd.DataFrame({
+        "feature": feature_cols,
+        "importance": mean_abs_shap
+    }).sort_values(by="importance", ascending=False)
+
+    # === 11. Plot importanță
+    plt.figure(figsize=(10, 8))
+    sns.barplot(x="importance", y="feature", data=importance_df.head(20), palette="viridis")
+    plt.title("Top 20 cele mai importante caracteristici (SHAP)")
+    plt.xlabel("Importanță medie (|SHAP|)")
+    plt.ylabel("Caracteristică")
+    plt.tight_layout()
+    plt.show()

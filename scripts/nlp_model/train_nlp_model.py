@@ -1,151 +1,190 @@
 import ast
-import time
+import pickle
 
+import numpy as np
 from matplotlib import pyplot as plt
 from sklearn.metrics import classification_report
 from sklearn.preprocessing import MultiLabelBinarizer
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
-from tensorflow.keras.metrics import BinaryAccuracy, Precision, Recall, AUC
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.preprocessing.text import Tokenizer
 
-from models.F1Score import F1Score
-from models.TimeHistory import TimeHistory
 from scripts.nlp_model.create_nlp_model import create_nlp_model
 from scripts.utils.load_data.load_data_utils import load_data
-from scripts.utils.plots.plotNLP import plot_history, plot_confusion_matrices
-from scripts.utils.test.test_text_nlp import test_text_nlp
 
 
-def concat_text(df, text_cols):
-    if isinstance(text_cols, str):
-        return df[text_cols].fillna("")
-    else:
-        return df[text_cols].fillna("").agg(" ".join, axis=1)
+# --- Preprocesare text ---
+def preprocess_text(df):
+    return (
+        df["Ce alte simptome sau boli prezinți?"].fillna(''))
+
+
+def plot_training_history(history):
+    plt.figure(figsize=(14, 5))
+
+    # Pierdere (loss)
+    plt.subplot(1, 2, 1)
+    plt.plot(history.history['loss'], label='Pierdere antrenare')
+    plt.plot(history.history['val_loss'], label='Pierdere validare')
+    plt.title("Evoluția pierderii (loss)")
+    plt.xlabel("Epoci")
+    plt.ylabel("Pierdere")
+    plt.legend()
+
+    # Precizie
+    plt.subplot(1, 2, 2)
+    plt.plot(history.history['precision'], label='Precizie antrenare')
+    plt.plot(history.history['val_precision'], label='Precizie validare')
+    plt.title("Evoluția preciziei")
+    plt.xlabel("Epoci")
+    plt.ylabel("Precizie")
+    plt.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+
+def print_classification_metrics(y_true, y_pred, class_names):
+    print("\nRaport clasificare per etichetă:\n")
+    report = classification_report(y_true, y_pred, target_names=class_names, zero_division=0)
+    print(report)
+
+
+def plot_confusion_per_class(y_true, y_pred, class_names):
+    correct = (y_true & y_pred).sum(axis=0)
+    total_true = y_true.sum(axis=0)
+    total_pred = y_pred.sum(axis=0)
+
+    recall = correct / np.clip(total_true, 1, None)
+    precision = correct / np.clip(total_pred, 1, None)
+
+    plt.figure(figsize=(14, 5))
+    x = range(len(class_names))
+    plt.bar(x, precision, alpha=0.6, label='Precizie')
+    plt.bar(x, recall, alpha=0.6, label='Recall')
+    plt.xticks(x, class_names, rotation=90)
+    plt.title("Precizie și recall pe fiecare etichetă")
+    plt.xlabel("Etichete")
+    plt.ylabel("Valori")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
 
 
 def train_model():
-    max_len = 300
-    max_vocab = 16000
+    # --- Încarcă datele ---
+    train_df = load_data("data/datasets/train/train_nlp.csv", sep=';')
+    val_df = load_data("data/datasets/validation/val_nlp.csv", sep=';')
+    test_df = load_data("data/datasets/test/test_nlp.csv", sep=';')
 
-    # 1. Încarcă datele
-    train = load_data("data/datasets/train/train.csv", sep=';')
-    val = load_data("data/datasets/validation/val.csv", sep=';')
-    test = load_data("data/datasets/test/test.csv", sep=';')
+    train_texts = preprocess_text(train_df).tolist()
+    val_texts = preprocess_text(val_df).tolist()
+    test_texts = preprocess_text(test_df).tolist()
 
-    text_cols = [
-        'Ce alte simptome sau boli prezinți?',
-        'In prezent, care este cea mai mare provocare a ta? Ce crezi ca te împiedica sa slăbești si sa ai o stare buna de sănătate? ',
-        # 'Ce te-a împiedicat in trecut sa slăbești? De ce ai eșuat la alte încercări? '
+    # --- Extrage etichetele multi-label cu MultiLabelBinarizer ---
+    def extract_labels(df, mlb=None):
+        labels_parsed = df['labels'].apply(ast.literal_eval)
+        if mlb is None:
+            mlb = MultiLabelBinarizer()
+            y = mlb.fit_transform(labels_parsed)
+            return y, mlb
+        else:
+            y = mlb.transform(labels_parsed)
+            return y
+
+    y_train, mlb = extract_labels(train_df)
+    y_val = extract_labels(val_df, mlb)
+    y_test = extract_labels(test_df, mlb)
+
+    print("Clase etichete:", mlb.classes_)
+
+    # --- Tokenizare ---
+    max_words = 100000
+    max_len = 100
+
+    all_texts = train_texts + val_texts + test_texts
+    tokenizer = Tokenizer(num_words=max_words, oov_token="<OOV>")
+    tokenizer.fit_on_texts(all_texts)
+
+    X_train = pad_sequences(tokenizer.texts_to_sequences(train_texts), maxlen=max_len, padding='post')
+    X_val = pad_sequences(tokenizer.texts_to_sequences(val_texts), maxlen=max_len, padding='post')
+    X_test = pad_sequences(tokenizer.texts_to_sequences(test_texts), maxlen=max_len, padding='post')
+
+    # --- Creează model ---
+    num_labels = y_train.shape[1]
+    model = create_nlp_model(max_words, max_len, num_labels)
+
+    # --- Antrenare ---
+    callbacks = [
+        EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True),
+        ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6, verbose=1),
     ]
 
-    for col in text_cols:
-        train[col] = train[col].fillna("").astype(str)
-        val[col] = val[col].fillna("").astype(str)
-        test[col] = test[col].fillna("").astype(str)
-
-    train["labels"] = train["labels"].apply(ast.literal_eval)
-    val["labels"] = val["labels"].apply(ast.literal_eval)
-    test["labels"] = test["labels"].apply(ast.literal_eval)
-
-    train_text = concat_text(train, text_cols)
-    val_text = concat_text(val, text_cols)
-    test_text = concat_text(test, text_cols)
-
-    # 2. Tokenizează textul
-    tokenizer = Tokenizer(num_words=max_vocab, oov_token="<OOV>")
-    tokenizer.fit_on_texts(train_text)
-
-    X_train = pad_sequences(tokenizer.texts_to_sequences(train_text), maxlen=max_len)
-    X_val = pad_sequences(tokenizer.texts_to_sequences(val_text), maxlen=max_len)
-    X_test = pad_sequences(tokenizer.texts_to_sequences(test_text), maxlen=max_len)
-
-    # 3. Transformă etichetele în one-hot vectori
-    mlb = MultiLabelBinarizer()
-    y_train = mlb.fit_transform(train["labels"])
-    y_val = mlb.transform(val["labels"])
-    y_test = mlb.transform(test["labels"])
-
-    print("Etichete:", mlb.classes_)
-
-    # === Creează și compilează modelul ===
-    model = create_nlp_model(max_len=max_len, max_vocab=max_vocab, num_classes=mlb)
-
-    early_stop = EarlyStopping(patience=5, restore_best_weights=True)
-    reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6)
-    time_callback = TimeHistory()
-
-    model.compile(
-        loss='binary_crossentropy',
-        optimizer="adam",
-        metrics=[
-            "accuracy",
-            BinaryAccuracy(name='binary_accuracy'),
-            Precision(name='precision'),
-            Recall(name='recall'),
-            AUC(name='auc'),
-            F1Score(name='f1_score')
-        ]
-    )
-
-    # === Antrenare ===
     history = model.fit(
         X_train, y_train,
-        epochs=20,
-        batch_size=64,
         validation_data=(X_val, y_val),
-        callbacks=[early_stop, reduce_lr, time_callback]
+        epochs=20,
+        batch_size=32,
+        callbacks=callbacks
     )
 
-    plot_history(history)
-    plot_confusion_matrices(model, X_test, y_test, class_names=mlb.classes_, threshold=0.5)
+    # --- Evaluare test ---
+    # După antrenament:
+    test_metrics = model.evaluate(X_test, y_test, verbose=1)
+    print(f"Test Loss: {test_metrics[0]:.4f}")
+    print(f"Test Accuracy: {test_metrics[1]:.4f}")
+    print(f"Test AUC: {test_metrics[2]:.4f}")
+    print(f"Test Precision: {test_metrics[3]:.4f}")
+    print(f"Test Recall: {test_metrics[4]:.4f}")
 
-    # === Timp antrenare ===
-    print("⏱️ Timp per epocă:", time_callback.times)
-    print("⏱️ Timp total antrenare:", sum(time_callback.times))
+    # --- Predicție exemplu ---
+    sample_text = ["durere abdominala si oboseala cronica", "am tiroidita hashimoto si infarct miocardic",
+                   "am pofta de dulce"]
 
-    # === Plotare evoluție metrici ===
-    plt.plot(history.history['precision'], label='Train Precision')
-    plt.plot(history.history['val_precision'], label='Val Precision')
-    plt.title("Evoluție Precision")
-    plt.xlabel("Epocă")
-    plt.ylabel("Precizie")
-    plt.legend()
-    plt.show()
+    # preprocesare text
+    sample_seq = pad_sequences(tokenizer.texts_to_sequences(sample_text), maxlen=max_len, padding='post')
 
-    # === Evaluare ===
-    results = model.evaluate(X_test, y_test)
-    for name, value in zip(model.metrics_names, results):
-        print(f"{name}: {value:.4f}")
+    # predicție
+    pred = model.predict(sample_seq)
 
-    # === Classification report ===
-    y_pred = model.predict(X_test)
-    y_pred_bin = (y_pred > 0.5).astype(int)
+    # conversie la etichete binare
+    pred_labels_bin = (pred > 0.5).astype(int)
 
-    print("\n=== Classification Report ===")
-    print(classification_report(y_test, y_pred_bin, target_names=mlb.classes_, zero_division=0))
+    # transformare în clase (folosind MultiLabelBinarizer)
+    pred_classes = mlb.inverse_transform(pred_labels_bin)
 
-    # === Funcție de predicție ===
-    def predict_labels(test_sample):
-        seq = pad_sequences(tokenizer.texts_to_sequences([test_sample]), maxlen=max_len)
-        pred = model.predict(seq)[0]
-        threshold = 0.5
-        labels = [mlb.classes_[i] for i, p in enumerate(pred) if p > threshold]
-        return labels
+    # afișare
+    for i, text in enumerate(sample_text):
+        print(f"\nText: {text}")
+        print("Etichete prezise:", pred_classes[i])
 
-    test_texts = test_text_nlp()
+    sample_text = [
+        "tiroida",
+        "tiroida hashimoto",
+        "hashimoto",
+        "oboseala",
+        "palpitatii",
+        "infarct",
+        "ficat gras",
+        "pofta de dulce"
+    ]
 
-    # Timp de inferență pe textele demo
-    inference_times = []
-    for text in test_texts:
-        start_time = time.time()
-        labels = predict_labels(text)
-        duration = time.time() - start_time
-        inference_times.append(duration)
+    sample_seq = pad_sequences(tokenizer.texts_to_sequences(sample_text), maxlen=max_len, padding='post')
+    pred = model.predict(sample_seq)
 
-        print(f"Text: {text}")
-        print(f"Labels prezise: {labels}")
-        print(f"Timp predicție: {duration:.4f} sec\n")
+    for i, text in enumerate(sample_text):
+        print(f"\nText: {text}")
+        for label, prob in zip(mlb.classes_, pred[i]):
+            if prob > 0.5:
+                print(f"  {label}: {prob:.2f}")
 
-    print(f"\nTimp mediu predicție: {sum(inference_times) / len(inference_times):.4f} sec")
-    print(f"Timp total pentru {len(test_texts)} texte: {sum(inference_times):.2f} sec")
+    model.save("models/nlp_model/new_model/nlp_model.h5")
+    # Salvare tokenizer
+    with open("models/nlp_model/new_model/tokenizer.pkl", "wb") as f:
+        pickle.dump(tokenizer, f)
+
+    # Salvare mlb (MultiLabelBinarizer)
+    with open("models/nlp_model/new_model/mlb.pkl", "wb") as f:
+        pickle.dump(mlb, f)
+
+    plot_training_history(history)
